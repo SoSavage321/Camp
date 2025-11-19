@@ -1,6 +1,6 @@
 // src/screens/home/HomeScreen.tsx
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -60,39 +60,45 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
-  // Filter today's and upcoming tasks
-  const todaysTasks = tasks.filter((task) => {
-    if (task.completed) return false;
-    const dueDate = task.dueAt.toDate();
+  // Memoize filtered tasks to prevent re-calculation on every render
+  const todaysTasks = useMemo(() => {
     const today = new Date();
     const threeDaysFromNow = addDays(today, 3);
-    return dueDate >= startOfDay(today) && dueDate <= endOfDay(threeDaysFromNow);
-  }).slice(0, 5);
+    return tasks
+      .filter((task) => {
+        if (task.completed) return false;
+        const dueDate = task.dueAt.toDate();
+        return dueDate >= startOfDay(today) && dueDate <= endOfDay(threeDaysFromNow);
+      })
+      .slice(0, 5);
+  }, [tasks]);
 
-  // Filter today's and upcoming events
-  const upcomingEvents = events.filter((event) => {
-    const eventDate = event.startsAt.toDate();
+  // Memoize filtered events to prevent re-calculation on every render
+  const upcomingEvents = useMemo(() => {
     const today = new Date();
     const threeDaysFromNow = addDays(today, 3);
-    return eventDate >= today && eventDate <= threeDaysFromNow;
-  }).slice(0, 5);
+    return events
+      .filter((event) => {
+        const eventDate = event.startsAt.toDate();
+        return eventDate >= today && eventDate <= threeDaysFromNow;
+      })
+      .slice(0, 5);
+  }, [events]);
 
-  // Get user's RSVPs
-  const myRSVPMap = new Map(myRSVPs.map((rsvp) => [rsvp.eventId, rsvp.status]));
+  // Memoize RSVP map for quick lookups
+  const myRSVPMap = useMemo(
+    () => new Map(myRSVPs.map((rsvp) => [rsvp.eventId, rsvp.status])),
+    [myRSVPs]
+  );
 
-  // Calculate completion rate
-  const completedToday = tasks.filter((task) => {
-    if (!task.completed) return false;
-    const dueDate = task.dueAt.toDate();
-    return isToday(dueDate);
-  }).length;
-
-  const totalToday = tasks.filter((task) => {
-    const dueDate = task.dueAt.toDate();
-    return isToday(dueDate);
-  }).length;
-
-  const completionRate = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
+  // Memoize stats to prevent re-calculation on every render
+  const { completedToday, totalToday, completionRate } = useMemo(() => {
+    const todaysTasks = tasks.filter((task) => isToday(task.dueAt.toDate()));
+    const completed = todaysTasks.filter((task) => task.completed).length;
+    const total = todaysTasks.length;
+    const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return { completedToday: completed, totalToday: total, completionRate: rate };
+  }, [tasks]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -101,7 +107,8 @@ export default function HomeScreen() {
     return 'Good evening';
   };
 
-  if (tasksLoading && eventsLoading && tasks.length === 0 && events.length === 0) {
+  // Show loading spinner on initial load while fetching data
+  if ((tasksLoading || eventsLoading) && tasks.length === 0 && events.length === 0) {
     return <LoadingSpinner />;
   }
 

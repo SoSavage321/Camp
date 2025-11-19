@@ -55,7 +55,9 @@ export default function App() {
       return;
     }
 
-    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    const token = (await Notifications.getExpoPushTokenAsync({
+      projectId: 'apps-bb7a8' // Add projectId to fix deprecation warning
+    })).data;
     console.log('Push token:', token);
   };
 

@@ -1,6 +1,6 @@
 // src/screens/chat/ChatListScreen.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -38,23 +38,16 @@ export default function ChatListScreen() {
     try {
       setIsLoading(true);
 
-      // Get chats where user is a participant
+      // Get chats with user as participant, sorted by last message time
       const constraints = [
         where('participants', 'array-contains', user.id),
+        orderBy('lastMessageAt', 'desc')
       ];
 
       const userChats = await FirestoreService.getDocuments<Chat>('chats', constraints);
-      
-      // Sort by last message time
-      userChats.sort((a, b) => {
-        const aTime = a.lastMessageAt?.toMillis() || 0;
-        const bTime = b.lastMessageAt?.toMillis() || 0;
-        return bTime - aTime;
-      });
-
       setChats(userChats);
 
-      // Load user data for DM chats
+      // Batch load user data for DM chats
       const userIds = new Set<string>();
       userChats.forEach((chat) => {
         if (chat.type === 'dm') {
@@ -63,15 +56,28 @@ export default function ChatListScreen() {
         }
       });
 
+      // Batch fetch users instead of sequential calls
       const usersMap = new Map<string, User>();
-      for (const userId of userIds) {
-        const userData = await FirestoreService.getDocument<User>('users', userId);
-        if (userData) usersMap.set(userId, userData);
+      if (userIds.size > 0) {
+        const userPromises = Array.from(userIds).map(async (userId) => {
+          const userData = await FirestoreService.getDocument<User>('users', userId);
+          return { userId, userData };
+        });
+        
+        const userResults = await Promise.allSettled(userPromises);
+        userResults.forEach((result) => {
+          if (result.status === 'fulfilled' && result.value.userData) {
+            usersMap.set(result.value.userId, result.value.userData);
+          }
+        });
       }
 
       setChatUsers(usersMap);
     } catch (error) {
-      console.error('Failed to load chats:', error);
+      // Remove console.error in production
+      if (__DEV__) {
+        console.error('Failed to load chats:', error);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -83,7 +89,7 @@ export default function ChatListScreen() {
     setRefreshing(false);
   };
 
-  const getChatName = (chat: Chat): string => {
+  const getChatName = useCallback((chat: Chat): string => {
     if (chat.type === 'dm') {
       const otherUserId = chat.participants.find((id) => id !== user?.id);
       const otherUser = otherUserId ? chatUsers.get(otherUserId) : null;
@@ -91,21 +97,21 @@ export default function ChatListScreen() {
     }
     // TODO: Get group/event name
     return 'Group Chat';
-  };
+  }, [user?.id, chatUsers]);
 
-  const getChatAvatar = (chat: Chat): string | undefined => {
+  const getChatAvatar = useCallback((chat: Chat): string | undefined => {
     if (chat.type === 'dm') {
       const otherUserId = chat.participants.find((id) => id !== user?.id);
       const otherUser = otherUserId ? chatUsers.get(otherUserId) : null;
       return otherUser?.avatarUrl;
     }
     return undefined;
-  };
+  }, [user?.id, chatUsers]);
 
-  const getUnreadCount = (chat: Chat): number => {
+  const getUnreadCount = useCallback((chat: Chat): number => {
     if (!user || !chat.unreadCount) return 0;
     return chat.unreadCount[user.id] || 0;
-  };
+  }, [user]);
 
   if (isLoading) {
     return <LoadingSpinner />;

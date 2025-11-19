@@ -69,8 +69,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       pushToken: "",
     };
 
-    await new Promise((r) => setTimeout(r, 800));
-
     set({
       user: fakeUser,
       isAuthenticated: true,
@@ -101,8 +99,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       updatedAt: new Date() as any,
       pushToken: "",
     };
-
-    await new Promise((r) => setTimeout(r, 800));
 
     set({
       user: fakeUser,

@@ -1,6 +1,6 @@
 // src/screens/chat/ChatThreadScreen.tsx
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import { ChatStackParamList } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { FirestoreService } from '@/services/firebase/firestore.service';
 import { Message } from '@/types';
-import { where, orderBy, Timestamp, onSnapshot, collection, query } from 'firebase/firestore';
+import { where, orderBy, Timestamp, onSnapshot, collection, query, limit } from 'firebase/firestore';
 import { db } from '@/services/firebase/config';
 import { Send, MoreVertical } from 'lucide-react-native';
 import { format, isToday, isYesterday } from 'date-fns';
@@ -34,20 +34,20 @@ export default function ChatThreadScreen({ route, navigation }: Props) {
   const [messageText, setMessageText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-
   const flatListRef = useRef<FlatList>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    // Real-time message listener
+    // Real-time message listener with cleanup
     const q = query(
       collection(db, 'messages'),
       where('chatId', '==', chatId),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
+      limit(50) // Limit messages for performance
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const messageList: Message[] = [];
-      
       snapshot.forEach((doc) => {
         messageList.push({
           id: doc.id,
@@ -60,9 +60,22 @@ export default function ChatThreadScreen({ route, navigation }: Props) {
 
       // Mark messages as read
       markMessagesAsRead(messageList);
+    }, (error) => {
+      // Handle Firestore errors gracefully
+      if (__DEV__) {
+        console.error('Message listener error:', error);
+      }
+      setIsLoading(false);
     });
 
-    return () => unsubscribe();
+    unsubscribeRef.current = unsubscribe;
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
   }, [chatId]);
 
   const markMessagesAsRead = async (messageList: Message[]) => {
@@ -100,13 +113,13 @@ export default function ChatThreadScreen({ route, navigation }: Props) {
     }
   };
 
-  const formatMessageTime = (date: Date) => {
+  const formatMessageTime = useCallback((date: Date) => {
     if (isToday(date)) return format(date, 'h:mm a');
     if (isYesterday(date)) return 'Yesterday';
     return format(date, 'MMM d');
-  };
+  }, []);
 
-  const renderMessage = ({ item }: { item: Message }) => {
+  const renderMessage = useCallback(({ item }: { item: Message }) => {
     const isOwnMessage = item.senderId === user?.id;
     const messageDate = item.createdAt.toDate();
 
@@ -153,7 +166,9 @@ export default function ChatThreadScreen({ route, navigation }: Props) {
         </View>
       </View>
     );
-  };
+  }, [user?.id, chatType, formatMessageTime]);
+
+  const memoizedMessages = useMemo(() => messages, [messages]);
 
   const renderSafetyNote = () => (
     <View style={styles.safetyNote}>
@@ -176,13 +191,23 @@ export default function ChatThreadScreen({ route, navigation }: Props) {
       {/* Messages List */}
       <FlatList
         ref={flatListRef}
-        data={messages}
+        data={memoizedMessages}
         keyExtractor={(item) => item.id}
         renderItem={renderMessage}
         inverted
         contentContainerStyle={styles.messagesList}
         ListFooterComponent={renderSafetyNote}
         onContentSizeChange={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        initialNumToRender={15}
+        windowSize={10}
+        getItemLayout={(data, index) => ({
+          length: 80, // Approximate item height
+          offset: 80 * index,
+          index,
+        })}
       />
 
       {/* Input Bar */}

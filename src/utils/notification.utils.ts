@@ -1,11 +1,112 @@
-// src/utils/notification.utils.ts
-
+// src/utils/notification.utils.optimized.ts
 import * as Notifications from 'expo-notifications';
 import { Timestamp } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// ============================================================
-// 🔔 Schedule Task Reminder
-// ============================================================
+// ========================================
+// 🔔 Optimized Notification Scheduler
+// ========================================
+
+interface PendingNotification {
+  id: string;
+  title: string;
+  targetTime: number;
+  type: 'task' | 'event';
+}
+
+const STORAGE_KEY = 'pending_notifications';
+const activeTimeouts = new Map<string, NodeJS.Timeout>();
+
+// Load pending notifications on app start
+const loadPendingNotifications = async (): Promise<Map<string, PendingNotification>> => {
+  try {
+    const stored = await AsyncStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const notifications: PendingNotification[] = JSON.parse(stored);
+      const map = new Map<string, PendingNotification>();
+      
+      // Filter out expired notifications
+      const now = Date.now();
+      notifications.forEach(notification => {
+        if (notification.targetTime > now) {
+          map.set(notification.id, notification);
+        }
+      });
+      
+      return map;
+    }
+  } catch (error) {
+    if (__DEV__) console.error('Failed to load pending notifications:', error);
+  }
+  return new Map();
+};
+
+// Save pending notifications to storage
+const savePendingNotifications = async (notifications: Map<string, PendingNotification>) => {
+  try {
+    const array = Array.from(notifications.values());
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(array));
+  } catch (error) {
+    if (__DEV__) console.error('Failed to save pending notifications:', error);
+  }
+};
+
+// Initialize notification scheduler
+let pendingNotifications = new Map<string, PendingNotification>();
+loadPendingNotifications().then(map => {
+  pendingNotifications = map;
+  // Reschedule notifications
+  map.forEach(notification => {
+    scheduleNotificationTimeout(notification);
+  });
+});
+
+// Schedule a notification with timeout
+const scheduleNotificationTimeout = (notification: PendingNotification) => {
+  const now = Date.now();
+  const delayMs = notification.targetTime - now;
+  
+  if (delayMs <= 0) return;
+  
+  // Clear existing timeout for this ID
+  const existingTimeout = activeTimeouts.get(notification.id);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+  }
+  
+  // Schedule new notification
+  const timeoutId = setTimeout(async () => {
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: notification.type === 'task' ? 'Task Due Soon' : 'Event Starting Soon',
+          body: `${notification.title} starts in 1 hour`,
+          data: { 
+            [notification.type === 'task' ? 'taskId' : 'eventId']: notification.id,
+            type: notification.type === 'task' ? 'task_due' : 'event_soon'
+          },
+        },
+        trigger: null, // Fire immediately
+      });
+      
+      // Remove from pending after sending
+      pendingNotifications.delete(notification.id);
+      activeTimeouts.delete(notification.id);
+      await savePendingNotifications(pendingNotifications);
+      
+      if (__DEV__) console.log(`Sent ${notification.type} notification for ${notification.title}`);
+    } catch (error) {
+      if (__DEV__) console.error('Failed to send notification:', error);
+    }
+  }, delayMs);
+  
+  activeTimeouts.set(notification.id, timeoutId);
+};
+
+// ========================================
+// 🔔 Main Scheduling Functions
+// ========================================
+
 export const scheduleTaskReminder = async (
   taskId: string,
   title: string,
@@ -14,30 +115,29 @@ export const scheduleTaskReminder = async (
   try {
     const reminderTime = new Date(dueAt.toDate().getTime() - 3600 * 1000);
     const now = new Date();
-
-    if (reminderTime > now) {
-      const delayMs = reminderTime.getTime() - now.getTime();
-
-      // Use setTimeout with scheduleNotificationAsync(null) for immediate delivery
-      setTimeout(async () => {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Task Due Soon',
-            body: `"${title}" is due in 1 hour`,
-            data: { taskId, type: 'task_due' },
-          },
-          trigger: null, // Fire immediately when setTimeout triggers
-        });
-      }, delayMs);
+    
+    if (reminderTime <= now) {
+      if (__DEV__) console.log('Task reminder time is in the past, skipping');
+      return;
     }
+    
+    const notification: PendingNotification = {
+      id: taskId,
+      title,
+      targetTime: reminderTime.getTime(),
+      type: 'task'
+    };
+    
+    pendingNotifications.set(taskId, notification);
+    await savePendingNotifications(pendingNotifications);
+    scheduleNotificationTimeout(notification);
+    
+    if (__DEV__) console.log(`Scheduled task reminder for ${reminderTime}`);
   } catch (error) {
-    console.error('Failed to schedule reminder:', error);
+    if (__DEV__) console.error('Failed to schedule task reminder:', error);
   }
 };
 
-// ============================================================
-// 🔔 Schedule Event Reminder
-// ============================================================
 export const scheduleEventReminder = async (
   eventId: string,
   title: string,
@@ -46,142 +146,76 @@ export const scheduleEventReminder = async (
   try {
     const reminderTime = new Date(startsAt.toDate().getTime() - 3600 * 1000);
     const now = new Date();
-
-    if (reminderTime > now) {
-      const delayMs = reminderTime.getTime() - now.getTime();
-
-      setTimeout(async () => {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Event Starting Soon',
-            body: `"${title}" starts in 1 hour`,
-            data: { eventId, type: 'event_soon' },
-          },
-          trigger: null,
-        });
-      }, delayMs);
-    }
-  } catch (error) {
-    console.error('Failed to schedule event reminder:', error);
-  }
-};
-
-// ============================================================
-// ❌ Cancel Notifications (Note: setTimeout-based can't be cancelled easily)
-// ============================================================
-export const cancelNotifications = async (identifier: string) => {
-  try {
-    // For setTimeout approach, we'd need to track timeout IDs
-    // This is a limitation of the setTimeout approach
-    console.log('Cancellation not fully supported with setTimeout approach');
-  } catch (error) {
-    console.error('Failed to cancel notifications:', error);
-  }
-};
-
-// ============================================================
-// 🔔 Alternative: Store notification data for background scheduling
-// ============================================================
-interface PendingNotification {
-  id: string;
-  title: string;
-  targetTime: number;
-  type: 'task' | 'event';
-  timeoutId?: NodeJS.Timeout;
-}
-
-// In-memory store of pending notifications
-const pendingNotifications = new Map<string, PendingNotification>();
-
-export const scheduleNotificationWithTracking = async (
-  id: string,
-  title: string,
-  targetTime: Timestamp,
-  type: 'task' | 'event'
-) => {
-  try {
-    const reminderTime = new Date(targetTime.toDate().getTime() - 3600 * 1000);
-    const now = new Date();
-
+    
     if (reminderTime <= now) {
-      return; // Don't schedule if reminder time is in the past
+      if (__DEV__) console.log('Event reminder time is in the past, skipping');
+      return;
     }
-
-    const delayMs = reminderTime.getTime() - now.getTime();
-
-    // Cancel existing notification for this ID
-    const existing = pendingNotifications.get(id);
-    if (existing?.timeoutId) {
-      clearTimeout(existing.timeoutId);
-    }
-
-    // Schedule new notification
-    const timeoutId = setTimeout(async () => {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: type === 'task' ? 'Task Due Soon' : 'Event Starting Soon',
-          body: type === 'task' 
-            ? `"${title}" is due in 1 hour` 
-            : `"${title}" starts in 1 hour`,
-          data: { 
-            [type === 'task' ? 'taskId' : 'eventId']: id, 
-            type: type === 'task' ? 'task_due' : 'event_soon' 
-          },
-        },
-        trigger: null,
-      });
-      
-      // Remove from pending after sending
-      pendingNotifications.delete(id);
-    }, delayMs);
-
-    // Store notification info
-    pendingNotifications.set(id, {
-      id,
+    
+    const notification: PendingNotification = {
+      id: eventId,
       title,
       targetTime: reminderTime.getTime(),
-      type,
-      timeoutId,
-    });
-
-    console.log(`Scheduled ${type} notification for ${reminderTime}`);
+      type: 'event'
+    };
+    
+    pendingNotifications.set(eventId, notification);
+    await savePendingNotifications(pendingNotifications);
+    scheduleNotificationTimeout(notification);
+    
+    if (__DEV__) console.log(`Scheduled event reminder for ${reminderTime}`);
   } catch (error) {
-    console.error('Failed to schedule notification:', error);
+    if (__DEV__) console.error('Failed to schedule event reminder:', error);
   }
 };
 
-export const cancelNotificationById = (id: string) => {
-  const notification = pendingNotifications.get(id);
-  if (notification?.timeoutId) {
-    clearTimeout(notification.timeoutId);
-    pendingNotifications.delete(id);
-    console.log(`Cancelled notification for ${id}`);
+// ========================================
+// ❌ Cancel Notifications
+// ========================================
+
+export const cancelTaskReminder = async (taskId: string) => {
+  const timeoutId = activeTimeouts.get(taskId);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+    activeTimeouts.delete(taskId);
   }
+  
+  pendingNotifications.delete(taskId);
+  await savePendingNotifications(pendingNotifications);
+  
+  if (__DEV__) console.log(`Cancelled task reminder for ${taskId}`);
 };
 
-// ============================================================
-// 🔔 Main Functions using Tracking Approach
-// ============================================================
-export const scheduleTaskReminderNew = async (
-  taskId: string,
-  title: string,
-  dueAt: Timestamp
-) => {
-  return scheduleNotificationWithTracking(taskId, title, dueAt, 'task');
+export const cancelEventReminder = async (eventId: string) => {
+  const timeoutId = activeTimeouts.get(eventId);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+    activeTimeouts.delete(eventId);
+  }
+  
+  pendingNotifications.delete(eventId);
+  await savePendingNotifications(pendingNotifications);
+  
+  if (__DEV__) console.log(`Cancelled event reminder for ${eventId}`);
 };
 
-export const scheduleEventReminderNew = async (
-  eventId: string,
-  title: string,
-  startsAt: Timestamp
-) => {
-  return scheduleNotificationWithTracking(eventId, title, startsAt, 'event');
+// Cancel all notifications
+export const cancelAllNotifications = async () => {
+  // Clear all active timeouts
+  activeTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+  activeTimeouts.clear();
+  
+  // Clear pending notifications
+  pendingNotifications.clear();
+  await savePendingNotifications(pendingNotifications);
+  
+  // Cancel scheduled expo notifications
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  
+  if (__DEV__) console.log('Cancelled all notifications');
 };
 
-export const cancelTaskReminder = (taskId: string) => {
-  cancelNotificationById(taskId);
-};
-
-export const cancelEventReminder = (eventId: string) => {
-  cancelNotificationById(eventId);
+// Get pending notifications count
+export const getPendingNotificationsCount = (): number => {
+  return pendingNotifications.size;
 };

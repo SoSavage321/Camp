@@ -3,7 +3,7 @@
     "name": "camp",
     "slug": "camp",
     "version": "1.0.0",
-    "sdkVersion": "51.0.0",
+    "sdkVersion": "54.0.0",
     "platforms": ["android", "ios"],
     "orientation": "portrait",
     "updates": {

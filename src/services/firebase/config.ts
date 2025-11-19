@@ -5,6 +5,7 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // 🔥 Hard-coded Firebase config
 const firebaseConfig = {
@@ -21,7 +22,8 @@ const firebaseConfig = {
 // Init app
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Auth
+// Auth - using getAuth for compatibility with Firebase 12.6.0
+// Note: Persistence will be handled at the app level for React Native
 const auth = getAuth(app);
 
 // Firestore
